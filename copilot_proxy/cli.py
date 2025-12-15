@@ -9,7 +9,10 @@ import uvicorn
 
 from .config import (
     get_api_key, set_api_key, get_base_url, set_base_url, get_config_file,
-    is_first_run, ensure_complete_config
+    is_first_run, ensure_complete_config,
+    set_context_length, get_context_length,
+    set_model_name, get_model_name,
+    set_temperature, get_temperature
 )
 
 DEFAULT_HOST = "127.0.0.1"
@@ -114,6 +117,27 @@ def build_parser() -> argparse.ArgumentParser:
     # Get base URL
     config_subparsers.add_parser("get-base-url", help="Show current base URL from config")
 
+    # Set context length
+    set_ctx_parser = config_subparsers.add_parser("set-context-length", help="Set context length in config")
+    set_ctx_parser.add_argument("context_length", type=int, help="Context length (e.g. 64000, 128000)")
+
+    # Get context length
+    config_subparsers.add_parser("get-context-length", help="Show current context length from config")
+
+    # Set model name
+    set_model_parser = config_subparsers.add_parser("set-model", help="Set default model name in config")
+    set_model_parser.add_argument("model_name", help="Model name (e.g. GLM-4.6)")
+
+    # Get model name
+    config_subparsers.add_parser("get-model", help="Show current default model name from config")
+
+    # Set temperature
+    set_temp_parser = config_subparsers.add_parser("set-temperature", help="Set temperature override in config")
+    set_temp_parser.add_argument("temperature", type=float, help="Temperature override (e.g. 0.1, 0.7)")
+
+    # Get temperature
+    config_subparsers.add_parser("get-temperature", help="Show current temperature override from config")
+
     # Show config path
     config_subparsers.add_parser("show-path", help="Show where the config file is stored")
 
@@ -153,6 +177,29 @@ def main(argv: Optional[list[str]] = None) -> None:
                 print(f"Current base URL: {base_url}")
             else:
                 print("No base URL found in config file.")
+        elif args.config_action == "set-context-length":
+            set_context_length(args.context_length)
+            print("Context length saved to config file.")
+        elif args.config_action == "get-context-length":
+            print(f"Current context length: {get_context_length()}")
+        elif args.config_action == "set-model":
+            set_model_name(args.model_name)
+            print("Model name saved to config file.")
+        elif args.config_action == "get-model":
+            model_name = get_model_name()
+            if model_name:
+                print(f"Current model name: {model_name}")
+            else:
+                print("No model name set in config (using default).")
+        elif args.config_action == "set-temperature":
+            set_temperature(args.temperature)
+            print("Temperature saved to config file.")
+        elif args.config_action == "get-temperature":
+            temp = get_temperature()
+            if temp is not None:
+                print(f"Current temperature: {temp}")
+            else:
+                print("No temperature override set in config.")
         elif args.config_action == "show-path":
             config_path = get_config_file()
             print(f"Config file location: {config_path}")

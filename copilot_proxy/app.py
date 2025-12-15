@@ -9,7 +9,13 @@ import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse
 
-from .config import get_api_key as get_config_api_key, get_base_url as get_config_base_url
+from .config import (
+    get_api_key as get_config_api_key,
+    get_base_url as get_config_base_url,
+    get_context_length,
+    get_model_name as get_config_model_name,
+    get_temperature,
+)
 
 DEFAULT_BASE_URL = "https://api.z.ai/api/coding/paas/v4"
 DEFAULT_MODEL = "GLM-4.6"
@@ -17,50 +23,56 @@ API_KEY_ENV_VARS = ("ZAI_API_KEY", "ZAI_CODING_API_KEY", "GLM_API_KEY")
 BASE_URL_ENV_VAR = "ZAI_API_BASE_URL"
 CHAT_COMPLETION_PATH = "/chat/completions"
 
-MODEL_CATALOG = [
-    {
-        "name": "GLM-4.6",
-        "model": "GLM-4.6",
-        "modified_at": "2024-01-01T00:00:00Z",
-        "size": 0,
-        "digest": "GLM-4.6",
-        "details": {
-            "format": "glm",
-            "family": "glm",
-            "families": ["glm"],
-            "parameter_size": "cloud",
-            "quantization_level": "cloud",
+def get_model_catalog():
+    """Generate the model catalog dynamically based on config."""
+    context_length = get_context_length()
+    return [
+        {
+            "name": "GLM-4.6",
+            "model": "GLM-4.6",
+            "modified_at": "2024-01-01T00:00:00Z",
+            "size": 0,
+            "digest": "GLM-4.6",
+            "details": {
+                "format": "glm",
+                "family": "glm",
+                "families": ["glm"],
+                "parameter_size": "cloud",
+                "quantization_level": "cloud",
+            },
         },
-    },
-    {
-        "name": "GLM-4.5",
-        "model": "GLM-4.5",
-        "modified_at": "2024-01-01T00:00:00Z",
-        "size": 0,
-        "digest": "GLM-4.5",
-        "details": {
-            "format": "glm",
-            "family": "glm",
-            "families": ["glm"],
-            "parameter_size": "cloud",
-            "quantization_level": "cloud",
+        {
+            "name": "GLM-4.5",
+            "model": "GLM-4.5",
+            "modified_at": "2024-01-01T00:00:00Z",
+            "size": 0,
+            "digest": "GLM-4.5",
+            "details": {
+                "format": "glm",
+                "family": "glm",
+                "families": ["glm"],
+                "parameter_size": "cloud",
+                "quantization_level": "cloud",
+            },
         },
-    },
-    {
-        "name": "GLM-4.5-Air",
-        "model": "GLM-4.5-Air",
-        "modified_at": "2024-01-01T00:00:00Z",
-        "size": 0,
-        "digest": "GLM-4.5-Air",
-        "details": {
-            "format": "glm",
-            "family": "glm",
-            "families": ["glm"],
-            "parameter_size": "cloud",
-            "quantization_level": "cloud",
+        {
+            "name": "GLM-4.5-Air",
+            "model": "GLM-4.5-Air",
+            "modified_at": "2024-01-01T00:00:00Z",
+            "size": 0,
+            "digest": "GLM-4.5-Air",
+            "details": {
+                "format": "glm",
+                "family": "glm",
+                "families": ["glm"],
+                "parameter_size": "cloud",
+                "quantization_level": "cloud",
+            },
         },
-    },
-]
+    ]
+
+
+MODEL_CATALOG = get_model_catalog()
 
 
 def _get_api_key() -> str:
@@ -144,7 +156,7 @@ def create_app() -> FastAPI:
     async def list_models():  # noqa: D401 - FastAPI route
         """Return the static catalog of GLM models."""
 
-        return {"models": MODEL_CATALOG}
+        return {"models": get_model_catalog()}
 
     @app.post("/api/show")
     async def show_model(request: Request):  # noqa: D401 - FastAPI route
@@ -157,7 +169,9 @@ def create_app() -> FastAPI:
             model_name = DEFAULT_MODEL
 
         if not model_name:
-            model_name = DEFAULT_MODEL
+            model_name = get_config_model_name() or DEFAULT_MODEL
+
+        context_length = get_context_length()
 
         return {
             "template": "{{ .System }}\n{{ .Prompt }}",
@@ -172,7 +186,7 @@ def create_app() -> FastAPI:
             "model_info": {
                 "general.basename": model_name,
                 "general.architecture": "glm",
-                "glm.context_length": 32768,
+                "glm.context_length": context_length,
             },
         }
 
@@ -183,7 +197,12 @@ def create_app() -> FastAPI:
         body = await request.json()
 
         if not body.get("model"):
-            body["model"] = DEFAULT_MODEL
+            body["model"] = get_config_model_name() or DEFAULT_MODEL
+
+        # Apply temperature override if configured
+        config_temp = get_temperature()
+        if config_temp is not None:
+            body["temperature"] = config_temp
 
         stream = body.get("stream", False)
 

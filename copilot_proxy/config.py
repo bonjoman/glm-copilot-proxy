@@ -120,6 +120,11 @@ def ensure_complete_config() -> None:
         config["base_url"] = "https://api.z.ai/api/coding/paas/v4"
         updated = True
 
+    # Ensure context_length exists
+    if "context_length" not in config:
+        config["context_length"] = 64000
+        updated = True
+
     # Ensure default host exists
     if "default_host" not in config:
         config["default_host"] = "127.0.0.1"
@@ -132,3 +137,69 @@ def ensure_complete_config() -> None:
 
     if updated:
         save_config(config)
+
+
+def get_context_length() -> int:
+    """Get context length from config file.
+
+    Returns:
+        Context length if found in config, 64000 otherwise.
+    """
+    config = load_config()
+    return config.get("context_length", 64000)
+
+
+def set_context_length(context_length: int) -> None:
+    """Save context length to config file.
+
+    Args:
+        context_length: The context length to save.
+    """
+    config = load_config()
+    config["context_length"] = context_length
+    save_config(config)
+
+
+def get_model_name() -> Optional[str]:
+    """Get model name from config file.
+
+    Returns:
+        Model name if found in config, None otherwise.
+    """
+    config = load_config()
+    model_name = config.get("model_name")
+    if model_name:
+        return model_name.strip()
+    return None
+
+
+def set_model_name(model_name: str) -> None:
+    """Save model name to config file.
+
+    Args:
+        model_name: The model name to save.
+    """
+    config = load_config()
+    config["model_name"] = model_name.strip()
+    save_config(config)
+
+
+def get_temperature() -> Optional[float]:
+    """Get temperature from config file.
+
+    Returns:
+        Temperature if found in config, None otherwise.
+    """
+    config = load_config()
+    return config.get("temperature")
+
+
+def set_temperature(temperature: float) -> None:
+    """Save temperature to config file.
+
+    Args:
+        temperature: The temperature to save.
+    """
+    config = load_config()
+    config["temperature"] = temperature
+    save_config(config)
