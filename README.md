@@ -2,11 +2,38 @@
 
 A proxy server that bridges GitHub Copilot Chat with GLM coding models by mimicking the Ollama API interface.
 
+## Quick start (minimum)
+
+```powershell
+# 1) Set your Z.AI API key for this shell
+$env:ZAI_API_KEY = "YOUR_KEY"
+
+# 2) Install dependencies (from this repo)
+uv sync
+
+# 3) Run the proxy (make sure Ollama isn't using port 11434)
+uv run copilot-proxy serve --host 127.0.0.1 --port 11434
+```
+
 ## Streaming fix: Copilot "silent stream" (GLM `reasoning_content`)
 
 Some GLM / Z.AI backends stream tokens in `choices[].delta.reasoning_content` instead of `choices[].delta.content`. Many clients (including GitHub Copilot's Ollama integration) only render `delta.content`, which can look like a long pause and then a sudden full answer.
 
 This proxy includes a compatibility shim for `/v1/chat/completions` with `stream=true`: it rewrites streamed SSE chunks by moving `delta.reasoning_content` into `delta.content` (and removes `reasoning_content`) so downstream clients see tokens continuously. Non-streaming responses are unchanged.
+
+To verify the fix, run a streaming request and confirm you see `delta.content` early (and never `reasoning_content`).
+Tip: on Windows/PowerShell, pass the JSON body via stdin/file (don't put JSON with quotes directly on the command line).
+
+```powershell
+$payload = @{ model="GLM-4.7"; stream=$true; messages=@(@{ role="user"; content="Think step by step. Explain TCP slow start in 5 sentences." }) } | ConvertTo-Json -Compress
+
+# Raw SSE stream
+$payload | curl.exe -s --globoff -N http://127.0.0.1:11434/v1/chat/completions -H "Content-Type: application/json" --data-binary '@-'
+
+# Sanity checks (first prints nothing; second prints lots of lines)
+$payload | curl.exe -s --globoff -N http://127.0.0.1:11434/v1/chat/completions -H "Content-Type: application/json" --data-binary '@-' | Select-String -SimpleMatch '"reasoning_content"'
+$payload | curl.exe -s --globoff -N http://127.0.0.1:11434/v1/chat/completions -H "Content-Type: application/json" --data-binary '@-' | Select-String -SimpleMatch '"content"'
+```
 
 ## What it does
 
@@ -40,11 +67,11 @@ uvx copilot-proxy --help
 
 ```powershell
 # Quick one-liner using uvx
-uvx copilot-proxy --host 127.0.0.1 --port 11434
+uvx copilot-proxy serve --host 127.0.0.1 --port 11434
 
 # Or inside a synced project environment
 uv sync
-uv run copilot-proxy
+uv run copilot-proxy serve --host 127.0.0.1 --port 11434
 ```
 
 The server listens on `http://localhost:11434` by default (same port Ollama uses). Make sure Ollama itself is stopped to avoid port conflicts.
@@ -163,6 +190,11 @@ The proxy server implements the Ollama API specification, allowing GitHub Copilo
    - Restart VS Code after starting the proxy server
    - Make sure you've selected 'Ollama' as the provider in Copilot settings
    - Check that the proxy server is responding at `http://localhost:11434`
+
+4. **PowerShell curl request fails / "Invalid JSON body"**
+   - Don't paste CMD-style escaped JSON into PowerShell.
+   - Build the JSON with `ConvertTo-Json` and pass it via stdin: `--data-binary '@-'`.
+   - If you pass a file, quote it: `--data-binary '@payload.json'` (unquoted `@...` is treated as splatting).
 
 ## Developing locally
 

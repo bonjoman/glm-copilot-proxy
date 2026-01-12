@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
 import httpx
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from .config import (
@@ -403,7 +403,16 @@ def create_app() -> FastAPI:
     async def chat_completions(request: Request):  # noqa: D401 - FastAPI route
         """Forward chat completion calls to the Z.AI backend."""
 
-        body = await request.json()
+        try:
+            body = await request.json()
+        except Exception as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Invalid JSON body. In PowerShell, avoid backslash-escaping quotes; use "
+                    "ConvertTo-Json and pass it to curl via stdin/file (e.g. `--data-binary '@-'`)."
+                ),
+            ) from exc
 
         if not body.get("model"):
             body["model"] = get_config_model_name() or DEFAULT_MODEL
