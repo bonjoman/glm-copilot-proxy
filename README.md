@@ -21,6 +21,14 @@ Some GLM / Z.AI backends stream tokens in `choices[].delta.reasoning_content` in
 
 This proxy includes a compatibility shim for `/v1/chat/completions` with `stream=true`: it rewrites streamed SSE chunks by moving `delta.reasoning_content` into `delta.content` (and removes `reasoning_content`) so downstream clients see tokens continuously. Non-streaming responses are unchanged.
 
+Why this is important:
+- **Fixes "silent streaming"**: clients that ignore `reasoning_content` finally receive continuous `delta.content` tokens.
+- **Preserves GLM thinking between turns (where supported)**: many chat clients build the assistant message/history from `delta.content` only. If `reasoning_content` is discarded, the model's planning/thinking may be missing from the stored assistant message, which can degrade multi-turn behavior. Unwrapping into `content` ensures clients that keep assistant messages can carry that context forward.
+
+Token usage impact:
+- **Upstream (Z.AI/GLM) usage for a single request**: unchanged - this proxy does not change what the model generates; it only rewrites the streamed fields.
+- **Downstream prompt size on later turns**: may increase if your client includes prior assistant `content` in the next request (because reasoning is now part of that content). This trade-off is often desirable for better multi-turn performance with GLM-style reasoning streams.
+
 Optional: wrap the streamed reasoning in `<think>...</think>` tags (some chat UIs collapse this) by setting:
 
 ```powershell
