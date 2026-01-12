@@ -21,6 +21,12 @@ Some GLM / Z.AI backends stream tokens in `choices[].delta.reasoning_content` in
 
 This proxy includes a compatibility shim for `/v1/chat/completions` with `stream=true`: it rewrites streamed SSE chunks by moving `delta.reasoning_content` into `delta.content` (and removes `reasoning_content`) so downstream clients see tokens continuously. Non-streaming responses are unchanged.
 
+Optional: wrap the streamed reasoning in `<think>...</think>` tags (some chat UIs collapse this) by setting:
+
+```powershell
+$env:COPILOT_PROXY_THINK_TAGS = "1"
+```
+
 To verify the fix, run a streaming request and confirm you see `delta.content` early (and never `reasoning_content`).
 Tip: on Windows/PowerShell, pass the JSON body via stdin/file (don't put JSON with quotes directly on the command line).
 

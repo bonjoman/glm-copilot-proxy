@@ -24,39 +24,136 @@ API_KEY_ENV_VARS = ("ZAI_API_KEY", "ZAI_CODING_API_KEY", "GLM_API_KEY")
 BASE_URL_ENV_VAR = "ZAI_API_BASE_URL"
 CHAT_COMPLETION_PATH = "/chat/completions"
 
+THINK_TAGS_ENV_VAR = "COPILOT_PROXY_THINK_TAGS"
+_THINK_OPEN = "<think>\n"
+_THINK_CLOSE = "\n</think>\n\n"
 
 
-def _rewrite_reasoning_deltas(data: dict) -> bool:
+def _is_truthy_env(env_var: str, default: bool) -> bool:
+    raw = os.getenv(env_var)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
+class _StreamRewriteState:
+    def __init__(self, *, wrap_think_tags: bool) -> None:
+        self.wrap_think_tags = wrap_think_tags
+        self.think_open_by_index: dict[int, bool] = {}
+        self.last_meta: dict[str, object] | None = None
+
+
+
+def _rewrite_reasoning_deltas(data: dict, state: _StreamRewriteState) -> bool:
     """Map reasoning_content into content so clients that ignore it stream tokens."""
 
     changed = False
     choices = data.get("choices")
     if not isinstance(choices, list):
         return False
-    for choice in choices:
+
+    for fallback_index, choice in enumerate(choices):
         if not isinstance(choice, dict):
             continue
+
+        raw_index = choice.get("index", fallback_index)
+        try:
+            index = int(raw_index)
+        except (TypeError, ValueError):
+            continue
+
         delta = choice.get("delta")
+        if delta is None:
+            delta = {}
+            choice["delta"] = delta
+            changed = True
         if not isinstance(delta, dict):
             continue
-        if "reasoning_content" not in delta:
-            continue
+
         # Copilot ignores reasoning_content; map it to content to avoid silent streams.
-        reasoning = delta.get("reasoning_content")
-        if reasoning is None:
-            delta.pop("reasoning_content", None)
+        has_reasoning = "reasoning_content" in delta
+        reasoning_value = delta.pop("reasoning_content", None) if has_reasoning else None
+        if has_reasoning:
             changed = True
-            continue
-        if delta.get("content") is None:
-            delta["content"] = reasoning
+
+        think_open = state.think_open_by_index.get(index, False)
+
+        reasoning_text: str | None
+        if reasoning_value is None:
+            reasoning_text = None
+        elif isinstance(reasoning_value, str):
+            reasoning_text = reasoning_value
         else:
-            delta["content"] = f"{delta['content']}{reasoning}"
-        delta.pop("reasoning_content", None)
-        changed = True
+            reasoning_text = str(reasoning_value)
+
+        content_value = delta.get("content")
+        content_text: str | None
+        if content_value is None:
+            content_text = None
+        elif isinstance(content_value, str):
+            content_text = content_value
+        else:
+            content_text = str(content_value)
+
+        if reasoning_text is not None:
+            prefix = ""
+            suffix = ""
+            if state.wrap_think_tags and not think_open:
+                prefix = _THINK_OPEN
+                think_open = True
+
+            if content_text:
+                # Some backends transition to normal content mid-chunk. Close <think> first so
+                # editor/chat UIs can keep reasoning separate from the final answer.
+                if state.wrap_think_tags and think_open:
+                    suffix = _THINK_CLOSE
+                    think_open = False
+                delta["content"] = f"{prefix}{reasoning_text}{suffix}{content_text}"
+            else:
+                delta["content"] = f"{prefix}{reasoning_text}"
+            changed = True
+
+        elif content_text and state.wrap_think_tags and think_open:
+            # First normal content after reasoning: close the <think> block.
+            delta["content"] = f"{_THINK_CLOSE}{content_text}"
+            changed = True
+            think_open = False
+
+        # If the stream ends without ever producing normal content, close before finishing.
+        if state.wrap_think_tags and think_open and choice.get("finish_reason") is not None:
+            existing = delta.get("content")
+            if existing:
+                delta["content"] = f"{existing}{_THINK_CLOSE}"
+            else:
+                delta["content"] = _THINK_CLOSE
+            changed = True
+            think_open = False
+
+        state.think_open_by_index[index] = think_open
+
     return changed
 
 
-def _transform_sse_event(event: bytes) -> bytes:
+def _build_think_close_sse(state: _StreamRewriteState) -> bytes | None:
+    open_indices = [idx for idx, is_open in state.think_open_by_index.items() if is_open]
+    if not open_indices:
+        return None
+
+    meta = state.last_meta or {}
+    payload: dict[str, object] = {
+        "object": meta.get("object", "chat.completion.chunk"),
+        "choices": [{"index": idx, "delta": {"content": _THINK_CLOSE}} for idx in open_indices],
+    }
+    for key in ("id", "created", "model"):
+        value = meta.get(key)
+        if value is not None:
+            payload[key] = value
+
+    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    return b"data: " + data
+
+
+def _transform_sse_event(event: bytes, state: _StreamRewriteState) -> bytes:
     if not event:
         return event
     lines = event.splitlines()
@@ -68,8 +165,11 @@ def _transform_sse_event(event: bytes) -> bytes:
             payload = line[len(b"data:") :].lstrip()
             payload_stripped = payload.strip()
             if payload_stripped == b"[DONE]":
-                new_lines.append(b"data: [DONE]")
-                continue
+                if state.wrap_think_tags:
+                    close_sse = _build_think_close_sse(state)
+                    if close_sse:
+                        return close_sse + b"\n\n" + b"data: [DONE]"
+                return b"data: [DONE]"
             try:
                 payload_text = payload.decode("utf-8")
             except UnicodeDecodeError:
@@ -80,7 +180,9 @@ def _transform_sse_event(event: bytes) -> bytes:
             except json.JSONDecodeError:
                 new_lines.append(line)
                 continue
-            if _rewrite_reasoning_deltas(data):
+            if isinstance(data, dict):
+                state.last_meta = {k: data.get(k) for k in ("id", "created", "model", "object")}
+            if isinstance(data, dict) and _rewrite_reasoning_deltas(data, state):
                 payload = json.dumps(data, ensure_ascii=False).encode("utf-8")
                 changed = True
             new_lines.append(b"data: " + payload)
@@ -442,6 +544,9 @@ def create_app() -> FastAPI:
                     )
                     response.raise_for_status()
 
+                    rewrite_state = _StreamRewriteState(
+                        wrap_think_tags=_is_truthy_env(THINK_TAGS_ENV_VAR, default=False)
+                    )
                     buffer = b""
                     async for chunk in response.aiter_bytes():
                         if not chunk:
@@ -458,9 +563,9 @@ def create_app() -> FastAPI:
                                 break
                             event = buffer[:sep_index]
                             buffer = buffer[sep_index + sep_len :]
-                            yield _transform_sse_event(event) + b"\n\n"
+                            yield _transform_sse_event(event, rewrite_state) + b"\n\n"
                     if buffer:
-                        yield _transform_sse_event(buffer)
+                        yield _transform_sse_event(buffer, rewrite_state)
 
                 except httpx.HTTPStatusError as exc:
                     if exc.response.status_code == 401:
