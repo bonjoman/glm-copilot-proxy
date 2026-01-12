@@ -2,6 +2,12 @@
 
 A proxy server that bridges GitHub Copilot Chat with GLM coding models by mimicking the Ollama API interface.
 
+## Streaming fix: Copilot "silent stream" (GLM `reasoning_content`)
+
+Some GLM / Z.AI backends stream tokens in `choices[].delta.reasoning_content` instead of `choices[].delta.content`. Many clients (including GitHub Copilot's Ollama integration) only render `delta.content`, which can look like a long pause and then a sudden full answer.
+
+This proxy includes a compatibility shim for `/v1/chat/completions` with `stream=true`: it rewrites streamed SSE chunks by moving `delta.reasoning_content` into `delta.content` (and removes `reasoning_content`) so downstream clients see tokens continuously. Non-streaming responses are unchanged.
+
 ## What it does
 
 This proxy server intercepts requests from GitHub Copilot's Ollama provider and forwards them to a GLM coding plan backend. By implementing the Ollama API interface, it allows the GitHub Copilot VS Code extension to communicate with alternative language models seamlessly.

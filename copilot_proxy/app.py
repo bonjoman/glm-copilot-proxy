@@ -1,6 +1,7 @@
 """FastAPI application exposing the Copilot proxy endpoints."""
 from __future__ import annotations
 
+import json
 import os
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
@@ -22,6 +23,74 @@ DEFAULT_MODEL = "GLM-4.7"
 API_KEY_ENV_VARS = ("ZAI_API_KEY", "ZAI_CODING_API_KEY", "GLM_API_KEY")
 BASE_URL_ENV_VAR = "ZAI_API_BASE_URL"
 CHAT_COMPLETION_PATH = "/chat/completions"
+
+
+
+def _rewrite_reasoning_deltas(data: dict) -> bool:
+    """Map reasoning_content into content so clients that ignore it stream tokens."""
+
+    changed = False
+    choices = data.get("choices")
+    if not isinstance(choices, list):
+        return False
+    for choice in choices:
+        if not isinstance(choice, dict):
+            continue
+        delta = choice.get("delta")
+        if not isinstance(delta, dict):
+            continue
+        if "reasoning_content" not in delta:
+            continue
+        # Copilot ignores reasoning_content; map it to content to avoid silent streams.
+        reasoning = delta.get("reasoning_content")
+        if reasoning is None:
+            delta.pop("reasoning_content", None)
+            changed = True
+            continue
+        if delta.get("content") is None:
+            delta["content"] = reasoning
+        else:
+            delta["content"] = f"{delta['content']}{reasoning}"
+        delta.pop("reasoning_content", None)
+        changed = True
+    return changed
+
+
+def _transform_sse_event(event: bytes) -> bytes:
+    if not event:
+        return event
+    lines = event.splitlines()
+    changed = False
+    new_lines: list[bytes] = []
+    for line in lines:
+        line = line.rstrip(b"\r")
+        if line.startswith(b"data:"):
+            payload = line[len(b"data:") :].lstrip()
+            payload_stripped = payload.strip()
+            if payload_stripped == b"[DONE]":
+                new_lines.append(b"data: [DONE]")
+                continue
+            try:
+                payload_text = payload.decode("utf-8")
+            except UnicodeDecodeError:
+                new_lines.append(line)
+                continue
+            try:
+                data = json.loads(payload_text)
+            except json.JSONDecodeError:
+                new_lines.append(line)
+                continue
+            if _rewrite_reasoning_deltas(data):
+                payload = json.dumps(data, ensure_ascii=False).encode("utf-8")
+                changed = True
+            new_lines.append(b"data: " + payload)
+        else:
+            new_lines.append(line)
+    if not changed:
+        return event
+    return b"\n".join(new_lines)
+
+
 
 def get_model_catalog():
     """Generate the model catalog dynamically based on config."""
@@ -364,8 +433,25 @@ def create_app() -> FastAPI:
                     )
                     response.raise_for_status()
 
+                    buffer = b""
                     async for chunk in response.aiter_bytes():
-                        yield chunk
+                        if not chunk:
+                            continue
+                        buffer += chunk
+                        while True:
+                            sep_index = buffer.find(b"\r\n\r\n")
+                            sep_len = 4
+                            lf_index = buffer.find(b"\n\n")
+                            if lf_index != -1 and (sep_index == -1 or lf_index < sep_index):
+                                sep_index = lf_index
+                                sep_len = 2
+                            if sep_index == -1:
+                                break
+                            event = buffer[:sep_index]
+                            buffer = buffer[sep_index + sep_len :]
+                            yield _transform_sse_event(event) + b"\n\n"
+                    if buffer:
+                        yield _transform_sse_event(buffer)
 
                 except httpx.HTTPStatusError as exc:
                     if exc.response.status_code == 401:
