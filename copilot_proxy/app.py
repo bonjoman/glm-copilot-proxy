@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
@@ -25,8 +26,11 @@ BASE_URL_ENV_VAR = "ZAI_API_BASE_URL"
 CHAT_COMPLETION_PATH = "/chat/completions"
 
 THINK_TAGS_ENV_VAR = "COPILOT_PROXY_THINK_TAGS"
+STRIP_THINK_TAGS_ENV_VAR = "COPILOT_PROXY_STRIP_THINK_TAGS"
 _THINK_OPEN = "<think>\n"
 _THINK_CLOSE = "\n</think>\n\n"
+
+_THINK_BLOCK_RE = re.compile(r"<think>\s*.*?\s*</think>\s*", flags=re.DOTALL)
 
 
 def _is_truthy_env(env_var: str, default: bool) -> bool:
@@ -41,6 +45,52 @@ class _StreamRewriteState:
         self.wrap_think_tags = wrap_think_tags
         self.think_open_by_index: dict[int, bool] = {}
         self.last_meta: dict[str, object] | None = None
+
+
+def _strip_think_blocks(value: str) -> str:
+    stripped = _THINK_BLOCK_RE.sub("", value)
+    stripped = stripped.lstrip("\n")
+    stripped = re.sub(r"\n{3,}", "\n\n", stripped)
+    if not stripped.strip():
+        return value
+    return stripped
+
+
+def _strip_think_tags_from_messages(body: dict) -> None:
+    messages = body.get("messages")
+    if not isinstance(messages, list):
+        return
+
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        if message.get("role") != "assistant":
+            continue
+
+        content = message.get("content")
+        if isinstance(content, str):
+            message["content"] = _strip_think_blocks(content)
+            continue
+
+        if isinstance(content, list):
+            changed = False
+            new_parts = []
+            for part in content:
+                if not isinstance(part, dict):
+                    new_parts.append(part)
+                    continue
+                text = part.get("text")
+                if isinstance(text, str):
+                    new_text = _strip_think_blocks(text)
+                    if new_text != text:
+                        changed = True
+                        new_parts.append({**part, "text": new_text})
+                    else:
+                        new_parts.append(part)
+                else:
+                    new_parts.append(part)
+            if changed:
+                message["content"] = new_parts
 
 
 
@@ -524,6 +574,12 @@ def create_app() -> FastAPI:
         if config_temp is not None:
             body["temperature"] = config_temp
 
+        # Strip <think> blocks from assistant messages before forwarding upstream.
+        # This prevents multi-turn prompt bloat when clients store/resend reasoning in `content`.
+        # Disable via `COPILOT_PROXY_STRIP_THINK_TAGS=0` if you want the model to see prior <think> blocks.
+        if _is_truthy_env(STRIP_THINK_TAGS_ENV_VAR, default=True):
+            _strip_think_tags_from_messages(body)
+
         stream = body.get("stream", False)
 
         api_key = _get_api_key()
@@ -545,7 +601,7 @@ def create_app() -> FastAPI:
                     response.raise_for_status()
 
                     rewrite_state = _StreamRewriteState(
-                        wrap_think_tags=_is_truthy_env(THINK_TAGS_ENV_VAR, default=False)
+                        wrap_think_tags=_is_truthy_env(THINK_TAGS_ENV_VAR, default=True)
                     )
                     buffer = b""
                     async for chunk in response.aiter_bytes():

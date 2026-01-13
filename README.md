@@ -2,6 +2,8 @@
 
 A proxy server that bridges GitHub Copilot Chat with GLM coding models by mimicking the Ollama API interface.
 
+Fork notice: this repo is a fork of `modpotato/copilot-proxy` with GLM streaming fixes and default think-tag handling.
+
 ## Quick start (minimum)
 
 ```powershell
@@ -15,6 +17,8 @@ uv sync
 uv run copilot-proxy serve --host 127.0.0.1 --port 11434
 ```
 
+The server listens on `http://localhost:11434` by default (same port Ollama uses). Make sure Ollama itself is stopped to avoid port conflicts.
+
 ## Streaming fix: Copilot "silent stream" (GLM `reasoning_content`)
 
 Some GLM / Z.AI backends stream tokens in `choices[].delta.reasoning_content` instead of `choices[].delta.content`. Many clients (including GitHub Copilot's Ollama integration) only render `delta.content`, which can look like a long pause and then a sudden full answer.
@@ -23,17 +27,27 @@ This proxy includes a compatibility shim for `/v1/chat/completions` with `stream
 
 Why this is important:
 - **Fixes "silent streaming"**: clients that ignore `reasoning_content` finally receive continuous `delta.content` tokens.
-- **Preserves GLM thinking between turns (where supported)**: many chat clients build the assistant message/history from `delta.content` only. If `reasoning_content` is discarded, the model's planning/thinking may be missing from the stored assistant message, which can degrade multi-turn behavior. Unwrapping into `content` ensures clients that keep assistant messages can carry that context forward.
+- **Avoids dropped output in clients that only build history from `delta.content`**: unwrapping ensures the client receives the full stream in the field it understands (even when the upstream model emits most tokens as `reasoning_content`).
 
 Token usage impact:
 - **Upstream (Z.AI/GLM) usage for a single request**: unchanged - this proxy does not change what the model generates; it only rewrites the streamed fields.
-- **Downstream prompt size on later turns**: may increase if your client includes prior assistant `content` in the next request (because reasoning is now part of that content). This trade-off is often desirable for better multi-turn performance with GLM-style reasoning streams.
+- **Downstream prompt size on later turns**: may increase if your client includes prior assistant `content` in the next request (because reasoning may now be part of that content). This proxy mitigates that by stripping `<think>...</think>` blocks from assistant history before forwarding upstream (enabled by default).
 
-Optional: wrap the streamed reasoning in `<think>...</think>` tags (some chat UIs collapse this) by setting:
+By default, the proxy wraps streamed reasoning in `<think>...</think>` tags (some chat UIs collapse this). To disable think tags:
 
 ```powershell
-$env:COPILOT_PROXY_THINK_TAGS = "1"
+$env:COPILOT_PROXY_THINK_TAGS = "0"
 ```
+
+Note: if you disable think tags, the proxy will still stream continuously (it will just stream the reasoning as normal `content`), but it won't be able to reliably strip reasoning from later turns.
+
+By default, the proxy strips `<think>...</think>` blocks from assistant messages before forwarding the next request upstream (to prevent multi-turn prompt bloat). To keep `<think>` blocks in the upstream history, disable stripping:
+
+```powershell
+$env:COPILOT_PROXY_STRIP_THINK_TAGS = "0"  # disable (enabled by default)
+```
+
+Tip: stripping only works if the reasoning is wrapped in `<think>...</think>` (enabled by default). If you set `COPILOT_PROXY_THINK_TAGS=0`, the proxy can't reliably separate reasoning from the final answer.
 
 To verify the fix, run a streaming request and confirm you see `delta.content` early (and never `reasoning_content`).
 Tip: on Windows/PowerShell, pass the JSON body via stdin/file (don't put JSON with quotes directly on the command line).
@@ -66,29 +80,6 @@ flowchart TD
 1. **Python 3.10+**
 2. **UV** for dependency management and packaging ([install instructions](https://docs.astral.sh/uv/getting-started/installation/))
 3. **Z.AI Coding Plan access** with a valid API key
-
-### Install from PyPI (recommended)
-
-```powershell
-# Ensure uv is installed first
-uv pip install copilot-proxy
-
-# Or run without installing globally
-uvx copilot-proxy --help
-```
-
-### Run the proxy locally
-
-```powershell
-# Quick one-liner using uvx
-uvx copilot-proxy serve --host 127.0.0.1 --port 11434
-
-# Or inside a synced project environment
-uv sync
-uv run copilot-proxy serve --host 127.0.0.1 --port 11434
-```
-
-The server listens on `http://localhost:11434` by default (same port Ollama uses). Make sure Ollama itself is stopped to avoid port conflicts.
 
 ### Configure credentials
 
@@ -218,49 +209,6 @@ uv run uvicorn copilot_proxy.app:app --reload --port 11434
 ```
 
 Use `uv run pytest` (once tests are added) or `uvx ruff check .` for linting.
-
-## Releasing to PyPI with UV
-
-1. Bump the version in `pyproject.toml`.
-2. Build the distributions:
-
-   ```powershell
-   uv build
-   ```
-
-3. Check the metadata:
-
-   ```powershell
-   uvx twine check dist/*
-   ```
-
-4. Publish to TestPyPI (recommended before production):
-
-   ```powershell
-   uv publish --repository testpypi
-   ```
-
-5. Publish to PyPI:
-
-   ```powershell
-   uv publish
-   ```
-
-Both `uv publish` commands expect the relevant API token to be available in the `UV_PUBLISH_TOKEN` environment variable.
-
-### GitHub Actions trusted publisher
-
-This repository includes `.github/workflows/publish.yml`, which builds and uploads releases automatically on GitHub tag releases. To enable it:
-
-1. Create a PyPI trusted publisher (pending or project-specific) pointing at:
-   - **Project**: `copilot-proxy`
-   - **Owner**: `modpotato`
-   - **Repository**: `copilot-proxy`
-   - **Workflow**: `publish.yml`
-   - **Environment**: `release`
-2. In GitHub, create the matching repository environment (`Settings → Environments → New environment → release`).
-3. Push a tag (e.g. `v0.1.0`) to GitHub (`git push origin v0.1.0`). The workflow will build with `uv`, publish to PyPI via OIDC, and create the GitHub release automatically.
-4. For dry runs, use the **Run workflow** button; the manual dispatch builds and validates without publishing or creating a release.
 
 ## License
 
