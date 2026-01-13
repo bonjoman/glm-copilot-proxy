@@ -33,21 +33,16 @@ Token usage impact:
 - **Upstream (Z.AI/GLM) usage for a single request**: unchanged - this proxy does not change what the model generates; it only rewrites the streamed fields.
 - **Downstream prompt size on later turns**: may increase if your client includes prior assistant `content` in the next request (because reasoning may now be part of that content). This proxy mitigates that by stripping `<think>...</think>` blocks from assistant history before forwarding upstream (enabled by default).
 
-By default, the proxy wraps streamed reasoning in `<think>...</think>` tags (some chat UIs collapse this). To disable think tags:
+By default, the proxy applies the GLM thinking fix:
+- rewrites `reasoning_content` -> `content`
+- wraps reasoning in `<think>...</think>` tags
+- strips `<think>...</think>` blocks from assistant history before forwarding upstream
+
+To disable the thinking fix entirely (no wrapping, no stripping, no rewrite), set:
 
 ```powershell
-$env:COPILOT_PROXY_THINK_TAGS = "0"
+$env:COPILOT_PROXY_THINKING_FIX = "0"
 ```
-
-Note: if you disable think tags, the proxy will still stream continuously (it will just stream the reasoning as normal `content`), but it won't be able to reliably strip reasoning from later turns.
-
-By default, the proxy strips `<think>...</think>` blocks from assistant messages before forwarding the next request upstream (to prevent multi-turn prompt bloat). To keep `<think>` blocks in the upstream history, disable stripping:
-
-```powershell
-$env:COPILOT_PROXY_STRIP_THINK_TAGS = "0"  # disable (enabled by default)
-```
-
-Tip: stripping only works if the reasoning is wrapped in `<think>...</think>` (enabled by default). If you set `COPILOT_PROXY_THINK_TAGS=0`, the proxy can't reliably separate reasoning from the final answer.
 
 To verify the fix, run a streaming request and confirm you see `delta.content` early (and never `reasoning_content`).
 Tip: on Windows/PowerShell, pass the JSON body via stdin/file (don't put JSON with quotes directly on the command line).

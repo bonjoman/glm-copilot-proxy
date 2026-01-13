@@ -25,8 +25,7 @@ API_KEY_ENV_VARS = ("ZAI_API_KEY", "ZAI_CODING_API_KEY", "GLM_API_KEY")
 BASE_URL_ENV_VAR = "ZAI_API_BASE_URL"
 CHAT_COMPLETION_PATH = "/chat/completions"
 
-THINK_TAGS_ENV_VAR = "COPILOT_PROXY_THINK_TAGS"
-STRIP_THINK_TAGS_ENV_VAR = "COPILOT_PROXY_STRIP_THINK_TAGS"
+THINKING_FIX_ENV_VAR = "COPILOT_PROXY_THINKING_FIX"
 _THINK_OPEN = "<think>\n"
 _THINK_CLOSE = "\n</think>\n\n"
 
@@ -41,8 +40,8 @@ def _is_truthy_env(env_var: str, default: bool) -> bool:
 
 
 class _StreamRewriteState:
-    def __init__(self, *, wrap_think_tags: bool) -> None:
-        self.wrap_think_tags = wrap_think_tags
+    def __init__(self) -> None:
+        self.wrap_think_tags = True
         self.think_open_by_index: dict[int, bool] = {}
         self.last_meta: dict[str, object] | None = None
 
@@ -574,10 +573,12 @@ def create_app() -> FastAPI:
         if config_temp is not None:
             body["temperature"] = config_temp
 
+        thinking_fix_enabled = _is_truthy_env(THINKING_FIX_ENV_VAR, default=True)
+
         # Strip <think> blocks from assistant messages before forwarding upstream.
         # This prevents multi-turn prompt bloat when clients store/resend reasoning in `content`.
-        # Disable via `COPILOT_PROXY_STRIP_THINK_TAGS=0` if you want the model to see prior <think> blocks.
-        if _is_truthy_env(STRIP_THINK_TAGS_ENV_VAR, default=True):
+        # Disable via `COPILOT_PROXY_THINKING_FIX=0`.
+        if thinking_fix_enabled:
             _strip_think_tags_from_messages(body)
 
         stream = body.get("stream", False)
@@ -600,9 +601,13 @@ def create_app() -> FastAPI:
                     )
                     response.raise_for_status()
 
-                    rewrite_state = _StreamRewriteState(
-                        wrap_think_tags=_is_truthy_env(THINK_TAGS_ENV_VAR, default=True)
-                    )
+                    if not thinking_fix_enabled:
+                        async for chunk in response.aiter_bytes():
+                            if chunk:
+                                yield chunk
+                        return
+
+                    rewrite_state = _StreamRewriteState()
                     buffer = b""
                     async for chunk in response.aiter_bytes():
                         if not chunk:
