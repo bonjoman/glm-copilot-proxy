@@ -78,15 +78,6 @@ flowchart TD
 
 ### Configure credentials
 
-**New users (recommended):**
-```powershell
-# Interactive setup - runs automatically on first use
-copilot-proxy
-
-# Or manually run setup wizard
-copilot-proxy config setup
-```
-
 **Advanced users - Environment variables:**
    ```powershell
    # PowerShell (current session only)
