@@ -41,7 +41,7 @@ By default, the proxy applies the GLM thinking fix:
 To disable the thinking fix entirely (no wrapping, no stripping, no rewrite), set:
 
 ```powershell
-$env:COPILOT_PROXY_THINKING_FIX = "0"
+$env:COPILOT_PROXY_THINKING_FIX = "0" # "1" to enable (default)
 ```
 
 To verify the fix, run a streaming request and confirm you see `delta.content` early (and never `reasoning_content`).
@@ -94,37 +94,37 @@ flowchart TD
 **Configuration Management:**
 ```powershell
 # Set API key in persistent config
-copilot-proxy config set-api-key your-zai-api-key
+uv run copilot-proxy config set-api-key your-zai-api-key
 
 # View current configuration
-copilot-proxy config get-api-key
+uv run copilot-proxy config get-api-key
 
 # Set custom base URL
-copilot-proxy config set-base-url https://your-custom-endpoint.com
+uv run copilot-proxy config set-base-url https://your-custom-endpoint.com
 
 # Show config file location
-copilot-proxy config show-path
+uv run copilot-proxy config show-path
 
 # Start proxy (uses saved config automatically)
-copilot-proxy serve
+uv run copilot-proxy serve
 
 # Set context length (controls Copilot context window size)
-copilot-proxy config set-context-length 128000
+uv run copilot-proxy config set-context-length 128000
 
 # View current context length (default: 64000)
-copilot-proxy config get-context-length
+uv run copilot-proxy config get-context-length
 
 # Set default model
-copilot-proxy config set-model GLM-4.7
+uv run copilot-proxy config set-model GLM-4.7
 
 # View current model
-copilot-proxy config get-model
+uv run copilot-proxy config get-model
 
 # Set temperature (0.0 = deterministic, 1.0 = creative)
-copilot-proxy config set-temperature 0.1
+uv run copilot-proxy config set-temperature 0.1
 
 # View current temperature
-copilot-proxy config get-temperature
+uv run copilot-proxy config get-temperature
 ```
 **Priority Order:** Config file > Environment variables > Default values
 
